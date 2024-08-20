@@ -19,11 +19,18 @@ typedef enum {
     TUYALINK_REGION_INDIA,
 } tuyalink_client_region_t;
 
+typedef enum {
+    TUYALINK_ENDPOINT_PROPERTY_REPORT,
+    TUYALINK_ENDPOINT_PROPERTY_REPORT_RESPONSE,
+    TUYALINK_ENDPOINT_PROPERTY_SET,
+    TUYALINK_ENDPOINT_PROPERTY_SET_RESPONSE,
+} tuyalink_client_endpoint_t;
+
 typedef struct {
     const char *uri;
     const char *device_id;
     const char *device_secret;
-    void (*message_handler)(void);
+    void (*message_handler)(void *, void *);
 } tuyalink_client_config_t;
 
 typedef struct {
@@ -33,6 +40,7 @@ typedef struct {
 } tuyalink_client_instance_t;
 
 typedef struct {
+    tuyalink_client_endpoint_t endpoint;
     uint32_t timestamp;
     uint32_t code;
     char *device_id;
@@ -48,7 +56,9 @@ tuyalink_client_instance_t *tuyalink_client_init(const tuyalink_client_config_t 
 
 void tuyalink_client_start(tuyalink_client_instance_t *client);
 
-void tuyalink_message_send(tuyalink_client_instance_t *client, char *topic, tuyalink_message_t *message);
+void tuyalink_client_destroy(tuyalink_client_instance_t *client);
+
+void tuyalink_message_send(tuyalink_client_instance_t *client, tuyalink_message_t *message);
 
 #ifdef __cplusplus
 }

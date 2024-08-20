@@ -42,6 +42,13 @@ static const char *tuyalink_client_region_uris[] =
     [TUYALINK_REGION_INDIA]  = "mqtts://m1.tuyain.com:8883", 
 };
 
+static const char *tuyalink_client_endpoints[] = {
+	"thing/property/report",
+	"thing/property/report_response",
+	"thing/property/set",
+	"thing/property/set_response",
+};
+
 static uint32_t get_timestamp() {
     struct timeval now;
     gettimeofday(&now, NULL);
@@ -90,41 +97,64 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
     esp_mqtt_event_handle_t event = event_data;
     tuyalink_client_instance_t *client = handler_args;
-    int msg_id;
     switch ((esp_mqtt_event_id_t)event_id) {
 
-        case MQTT_EVENT_BEFORE_CONNECT:
-            ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT");
-            break;
+        case MQTT_EVENT_BEFORE_CONNECT: ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT"); break;
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
 
             char topic_auto_subscribe[64];
             sprintf(topic_auto_subscribe, "tylink/%s/channel/downlink/auto_subscribe", client->config->device_id);
-            msg_id = esp_mqtt_client_subscribe(client->mqtt_client, topic_auto_subscribe, 1);
-            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
+            esp_mqtt_client_subscribe(client->mqtt_client, topic_auto_subscribe, 1);
+            ESP_LOGI(TAG, "sent subscribe successful");
             client->connected = true;
 
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
             client->connected = false;
+            esp_restart();
             break;
 
-        case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-            break;
-        case MQTT_EVENT_UNSUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
-            break;
-        case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
-            break;
+        case MQTT_EVENT_SUBSCRIBED: ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id); break;
+        case MQTT_EVENT_UNSUBSCRIBED: ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id); break;
+        case MQTT_EVENT_PUBLISHED: ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id); break;
         case MQTT_EVENT_DATA:
             ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+
             printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             printf("DATA=%.*s\r\n", event->data_len, event->data);
+
+            cJSON *message_json = cJSON_ParseWithLength(event->data, event->data_len);
+            cJSON *msgid = cJSON_GetObjectItemCaseSensitive(message_json, "msgId"); 
+            cJSON *timestamp = cJSON_GetObjectItemCaseSensitive(message_json, "time"); 
+            cJSON *data = cJSON_GetObjectItemCaseSensitive(message_json, "data"); 
+
+            tuyalink_message_t message;
+
+            char endpoint[128];
+            strncpy(endpoint, event->topic + 30, event->topic_len - 29);
+
+            for (size_t i = 0; i < sizeof(tuyalink_client_endpoints)/4; i++) {
+                if(strncmp(endpoint, tuyalink_client_endpoints[i], event->topic_len - 29) == 0) {
+                    message.endpoint = i;
+                    break;
+                }
+            }
+            
+            if(cJSON_IsNumber(msgid) && msgid->valueint != NULL) {
+                char msgid_int[32];
+                sprintf(msgid_int, "%d", msgid->valueint);
+                message.msgid = msgid_int;
+            }
+            if(cJSON_IsString(msgid) && msgid->valuestring != NULL) message.msgid = msgid->valuestring;
+            if(cJSON_IsNumber(timestamp) && timestamp->valueint != NULL) message.timestamp = timestamp->valueint;
+            if(cJSON_IsObject(data)) message.data = cJSON_Print(data);
+            
+            (client->config->message_handler)(client, &message);
+
+            cJSON_Delete(message_json);
+
             break;
         case MQTT_EVENT_ERROR:
             ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -139,9 +169,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 ESP_LOGW(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
             }
             break;
-        default:
-            ESP_LOGI(TAG, "Other event id:%d", event->event_id);
-            break;
+        default: ESP_LOGI(TAG, "Other event id:%d", event->event_id); break;
     }
 }
 
@@ -176,29 +204,33 @@ void tuyalink_client_start(tuyalink_client_instance_t *client) {
     esp_mqtt_client_start(client->mqtt_client);
 }
 
-void tuyalink_message_send(tuyalink_client_instance_t *client, char *topic, tuyalink_message_t *message) {
+void tuyalink_client_destroy(tuyalink_client_instance_t *client) {
+    if (client) {
+        if (client->mqtt_client) esp_mqtt_client_destroy(client->mqtt_client);
+        free(client);
+    }
+}
+
+void tuyalink_message_send(tuyalink_client_instance_t *client, tuyalink_message_t *message) {
     cJSON *message_json = cJSON_CreateObject();
 
     cJSON_AddStringToObject(message_json, "msgId", message->msgid);
     cJSON_AddNumberToObject(message_json, "time", message->timestamp ? message->timestamp : get_timestamp());
 
-    if(message->data) {
-        cJSON_AddRawToObject(message_json, "data", message->data);
-    }
-
-    if(message->ack) {
-        cJSON_AddRawToObject(message_json, "sys", "{\"ack\":1}");
-    }
+    if(message->data) cJSON_AddRawToObject(message_json, "data", message->data);
+    if(message->ack) cJSON_AddRawToObject(message_json, "sys", "{\"ack\":1}");
 
     char *payload = cJSON_Print(message_json);
     cJSON_Delete(message_json);
     size_t payload_len = strlen(payload) * sizeof(char);
 
     char topic_path[128];
-	sprintf(topic_path, "tylink/%s/%s", client->config->device_id, topic);
+	sprintf(topic_path, "tylink/%s/%s", client->config->device_id, tuyalink_client_endpoints[message->endpoint]);
 
     ESP_LOGI(TAG, "publish topic:%s", topic_path);
 	ESP_LOGI(TAG, "payload size:%d, %s\r\n", payload_len, payload);
 	int msg_id = esp_mqtt_client_publish(client->mqtt_client, topic_path, payload, payload_len, 0, 0);
     ESP_LOGI(TAG, "publish successful, msg_id=%d", msg_id);
+
+    free(payload);
 }
