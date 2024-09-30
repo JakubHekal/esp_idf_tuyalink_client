@@ -26,17 +26,24 @@ typedef enum {
     TUYALINK_ENDPOINT_PROPERTY_SET_RESPONSE,
 } tuyalink_client_endpoint_t;
 
+typedef enum {
+    TUYALINK_STATUS_CONNECTING,
+    TUYALINK_STATUS_CONNECTED,
+    TUYALINK_STATUS_DISCONNECTED,
+} tuyalink_client_status_t;
+
 typedef struct {
     const char *uri;
     const char *device_id;
     const char *device_secret;
     void (*message_handler)(void *, void *);
+    void (*status_handler)(void *, void *);
 } tuyalink_client_config_t;
 
 typedef struct {
     const tuyalink_client_config_t *config;
     esp_mqtt_client_handle_t mqtt_client;
-    bool connected;
+    tuyalink_client_status_t status;
 } tuyalink_client_instance_t;
 
 typedef struct {

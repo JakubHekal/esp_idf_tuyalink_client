@@ -88,11 +88,12 @@ static void create_credentials(const char *device_id, const char *device_secret,
     }
 }
 
-const char *tuyalink_get_region_uri(tuyalink_client_region_t region) {
-    return tuyalink_client_region_uris[region];
+static void tuyalink_client_set_state(tuyalink_client_instance_t *client, tuyalink_client_status_t status) {
+    client->status = status;
+    (client->config->status_handler)(client, &client->status);
 }
 
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+static void tuyalink_mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
     esp_mqtt_event_handle_t event = event_data;
@@ -107,15 +108,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             sprintf(topic_auto_subscribe, "tylink/%s/channel/downlink/auto_subscribe", client->config->device_id);
             esp_mqtt_client_subscribe(client->mqtt_client, topic_auto_subscribe, 1);
             ESP_LOGI(TAG, "sent subscribe successful");
-            client->connected = true;
-
+            tuyalink_client_set_state(client, TUYALINK_STATUS_CONNECTED);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-            client->connected = false;
-            esp_restart();
+            tuyalink_client_set_state(client, TUYALINK_STATUS_DISCONNECTED);
             break;
-
         case MQTT_EVENT_SUBSCRIBED: ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id); break;
         case MQTT_EVENT_UNSUBSCRIBED: ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id); break;
         case MQTT_EVENT_PUBLISHED: ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id); break;
@@ -173,6 +171,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
+const char *tuyalink_get_region_uri(tuyalink_client_region_t region) {
+    return tuyalink_client_region_uris[region];
+}
+
 tuyalink_client_instance_t *tuyalink_client_init(const tuyalink_client_config_t *config) {
     tuyalink_client_instance_t *client = calloc(1, sizeof(tuyalink_client_instance_t));
     
@@ -192,16 +194,16 @@ tuyalink_client_instance_t *tuyalink_client_init(const tuyalink_client_config_t 
     };
 
     client->mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-    esp_mqtt_client_register_event(client->mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
+    esp_mqtt_client_register_event(client->mqtt_client, ESP_EVENT_ANY_ID, tuyalink_mqtt_event_handler, client);
     client->config = config;
-    client->connected = false;
+    client->status = TUYALINK_STATUS_DISCONNECTED;
     
-
     return client;
 }
 
 void tuyalink_client_start(tuyalink_client_instance_t *client) {
     esp_mqtt_client_start(client->mqtt_client);
+    tuyalink_client_set_state(client, TUYALINK_STATUS_CONNECTING);
 }
 
 void tuyalink_client_destroy(tuyalink_client_instance_t *client) {
