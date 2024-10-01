@@ -43,10 +43,10 @@ static const char *tuyalink_client_region_uris[] =
 };
 
 static const char *tuyalink_client_endpoints[] = {
-	"thing/property/report",
-	"thing/property/report_response",
-	"thing/property/set",
-	"thing/property/set_response",
+	[TUYALINK_ENDPOINT_PROPERTY_REPORT] = "thing/property/report",
+	[TUYALINK_ENDPOINT_PROPERTY_REPORT_RESPONSE] = "thing/property/report_response",
+	[TUYALINK_ENDPOINT_PROPERTY_SET] = "thing/property/set",
+	[TUYALINK_ENDPOINT_PROPERTY_SET_RESPONSE] = "thing/property/set_response",
 };
 
 static uint32_t get_timestamp() {
@@ -55,33 +55,25 @@ static uint32_t get_timestamp() {
     return now.tv_sec;
 }
 
-static void hmac256_create(unsigned char *key, size_t key_len, unsigned char *message, size_t message_len, unsigned char *out)
-{
-    mbedtls_md_context_t ctx;
-
-    mbedtls_md_init(&ctx);
-
-    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    mbedtls_md_setup(&ctx, info, 1);
-    mbedtls_md_hmac_starts(&ctx, key, key_len);
-    mbedtls_md_hmac_update(&ctx, message, message_len);
-    mbedtls_md_hmac_finish(&ctx, out);
-    mbedtls_md_free(&ctx);
-}
-
 static void create_credentials(const char *device_id, const char *device_secret, char *client_id, char *username, char *password) {
     uint32_t timestamp = get_timestamp();
 
-    sprintf(username, "%s|signMethod=hmacSha256,timestamp=%d,secureMode=1,accessType=1", device_id, timestamp);
+    sprintf(username, "%s|signMethod=hmacSha256,timestamp=%u,secureMode=1,accessType=1", device_id, timestamp);
 
     sprintf(client_id, "tuyalink_%s", device_id);
 
     char password_raw[255];
-    size_t password_raw_len = sprintf(password_raw, "deviceId=%s,timestamp=%d,secureMode=1,accessType=1", device_id, timestamp);
+    size_t password_raw_len = sprintf(password_raw, "deviceId=%s,timestamp=%u,secureMode=1,accessType=1", device_id, timestamp);
 
     unsigned char hmac[32];
 
-    hmac256_create(device_secret, strlen(device_secret), (unsigned char*)password_raw, password_raw_len, hmac);
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+    mbedtls_md_hmac_starts(&ctx, (unsigned char*)device_secret, strlen(device_secret));
+    mbedtls_md_hmac_update(&ctx, (unsigned char*)password_raw, password_raw_len);
+    mbedtls_md_hmac_finish(&ctx, hmac);
+    mbedtls_md_free(&ctx);
 
     for (int i = 0; i < 32; i++) {
         sprintf(password + 2*i, "%02x", hmac[i]);
@@ -175,6 +167,10 @@ const char *tuyalink_get_region_uri(tuyalink_client_region_t region) {
     return tuyalink_client_region_uris[region];
 }
 
+const char *tuyalink_get_endpoint(tuyalink_client_endpoint_t endpoint) {
+    return tuyalink_client_endpoints[endpoint];
+}
+
 tuyalink_client_instance_t *tuyalink_client_init(const tuyalink_client_config_t *config) {
     tuyalink_client_instance_t *client = calloc(1, sizeof(tuyalink_client_instance_t));
     
@@ -227,7 +223,7 @@ void tuyalink_message_send(tuyalink_client_instance_t *client, tuyalink_message_
     size_t payload_len = strlen(payload) * sizeof(char);
 
     char topic_path[128];
-	sprintf(topic_path, "tylink/%s/%s", client->config->device_id, tuyalink_client_endpoints[message->endpoint]);
+	sprintf(topic_path, "tylink/%s/%s", client->config->device_id, message->endpoint);
 
     ESP_LOGI(TAG, "publish topic:%s", topic_path);
 	ESP_LOGI(TAG, "payload size:%d, %s\r\n", payload_len, payload);

@@ -47,7 +47,7 @@ typedef struct {
 } tuyalink_client_instance_t;
 
 typedef struct {
-    tuyalink_client_endpoint_t endpoint;
+    char *endpoint;
     uint32_t timestamp;
     uint32_t code;
     char *device_id;
@@ -58,6 +58,8 @@ typedef struct {
 } tuyalink_message_t;
 
 const char *tuyalink_get_region_uri(tuyalink_client_region_t region);
+
+const char *tuyalink_get_endpoint(tuyalink_client_endpoint_t endpoint);
 
 tuyalink_client_instance_t *tuyalink_client_init(const tuyalink_client_config_t *config);
 
